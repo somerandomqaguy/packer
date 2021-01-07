@@ -76,11 +76,11 @@ func (p *Parser) decodeSource(block *hcl.Block) (SourceBlock, hcl.Diagnostics) {
 	}
 	var diags hcl.Diagnostics
 
-	if !p.BuilderSchemas.Has(source.Type) {
+	if !p.PluginStore.BuilderStore.Has(source.Type) {
 		diags = append(diags, &hcl.Diagnostic{
 			Summary:  "Unknown " + buildSourceLabel + " type " + source.Type,
 			Subject:  block.LabelRanges[0].Ptr(),
-			Detail:   fmt.Sprintf("known builders: %v", p.BuilderSchemas.List()),
+			Detail:   fmt.Sprintf("known builders: %v", p.PluginStore.BuilderStore.List()),
 			Severity: hcl.DiagError,
 		})
 		return source, diags
@@ -92,7 +92,7 @@ func (p *Parser) decodeSource(block *hcl.Block) (SourceBlock, hcl.Diagnostics) {
 func (cfg *PackerConfig) startBuilder(source SourceBlock, ectx *hcl.EvalContext, opts packer.GetBuildsOptions) (packersdk.Builder, hcl.Diagnostics, []string) {
 	var diags hcl.Diagnostics
 
-	builder, err := cfg.builderSchemas.Start(source.Type)
+	builder, err := cfg.parser.PluginStore.BuilderStore.Start(source.Type)
 	if err != nil {
 		diags = append(diags, &hcl.Diagnostic{
 			Summary: "Failed to load " + sourceLabel + " type",

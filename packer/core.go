@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -93,6 +96,91 @@ type ComponentFinder struct {
 	BuilderStore       BuilderStore
 	ProvisionerStore   ProvisionerStore
 	PostProcessorStore PostProcessorStore
+}
+
+// DiscoverPlugin takes the description from a multiplugin binary and
+// makes the plugins available to use in Packer. Each plugin found in the
+// binary will be addressable using `${pluginName}-${builderName}` for example.
+// pluginName could be manually set. It usually is a cloud name like amazon.
+// pluginName can be extrapolated from the filename of the binary; so
+// if the "packer-plugin-amazon" binary had an "ebs" builder one could use
+// the "amazon-ebs" builder.
+func (c *ComponentFinder) DiscoverPlugin(pluginName, pluginPath string) error {
+	out, err := exec.Command(pluginPath, "describe").Output()
+	if err != nil {
+		return err
+	}
+	var desc pluginsdk.SetDescription
+	if err := json.Unmarshal(out, &desc); err != nil {
+		return err
+	}
+
+	pluginPrefix := pluginName + "-"
+
+	for _, builderName := range desc.Builders {
+		builderName := builderName // copy to avoid pointer overwrite issue
+		c.BuilderStore.Add(pluginPrefix+builderName, func() (packersdk.Builder, error) {
+			return c.Client(pluginPath, "start", "builder", builderName).Builder()
+		})
+	}
+	if len(desc.Builders) > 0 {
+		log.Printf("found external %v builders from %s plugin", desc.Builders, pluginName)
+	}
+
+	for _, postProcessorName := range desc.PostProcessors {
+		postProcessorName := postProcessorName // copy to avoid pointer overwrite issue
+		c.PostProcessorStore.Add(pluginPrefix+postProcessorName, func() (packersdk.PostProcessor, error) {
+			return c.Client(pluginPath, "start", "post-processor", postProcessorName).PostProcessor()
+		})
+	}
+	if len(desc.PostProcessors) > 0 {
+		log.Printf("found external %v post-processors from %s plugin", desc.PostProcessors, pluginName)
+	}
+
+	for _, provisionerName := range desc.Provisioners {
+		provisionerName := provisionerName // copy to avoid pointer overwrite issue
+		c.ProvisionerStore.Add(pluginPrefix+provisionerName, func() (packersdk.Provisioner, error) {
+			return c.Client(pluginPath, "start", "provisioner", provisionerName).Provisioner()
+		})
+	}
+	if len(desc.Provisioners) > 0 {
+		log.Printf("found external %v provisioner from %s plugin", desc.Provisioners, pluginName)
+	}
+
+	return nil
+}
+
+func (c *ComponentFinder) Client(path string, args ...string) *Client {
+	originalPath := path
+
+	// First attempt to find the executable by consulting the PATH.
+	path, err := exec.LookPath(path)
+	if err != nil {
+		// If that doesn't work, look for it in the same directory
+		// as the `packer` executable (us).
+		log.Printf("Plugin could not be found at %s (%v). Checking same directory as executable.", originalPath, err)
+		exePath, err := os.Executable()
+		if err != nil {
+			log.Printf("Couldn't get current exe path: %s", err)
+		} else {
+			log.Printf("Current exe path: %s", exePath)
+			path = filepath.Join(filepath.Dir(exePath), filepath.Base(originalPath))
+		}
+	}
+
+	// If everything failed, just use the original path and let the error
+	// bubble through.
+	if path == "" {
+		path = originalPath
+	}
+
+	log.Printf("Creating plugin client for path: %s", path)
+	var config ClientConfig
+	config.Cmd = exec.Command(path, args...)
+	config.Managed = true
+	config.MinPort = c.PluginMinPort
+	config.MaxPort = c.PluginMaxPort
+	return NewClient(&config)
 }
 
 // NewCore creates a new Core.

@@ -58,11 +58,7 @@ type Parser struct {
 
 	*hclparse.Parser
 
-	BuilderSchemas packer.BuilderStore
-
-	ProvisionersSchemas packer.ProvisionerStore
-
-	PostProcessorsSchemas packer.PostProcessorStore
+	PluginStore packer.ComponentFinder
 }
 
 const (
@@ -129,9 +125,6 @@ func (p *Parser) Parse(filename string, varFiles []string, argVars map[string]st
 		Basedir:                 basedir,
 		Cwd:                     wd,
 		CorePackerVersionString: p.CorePackerVersionString,
-		builderSchemas:          p.BuilderSchemas,
-		provisionersSchemas:     p.ProvisionersSchemas,
-		postProcessorsSchemas:   p.PostProcessorsSchemas,
 		parser:                  p,
 		files:                   files,
 	}
@@ -143,7 +136,7 @@ func (p *Parser) Parse(filename string, varFiles []string, argVars map[string]st
 	}
 
 	// Before we go further, we'll check to make sure this version can read
-	// that file, so we can produce a version-related error message rather than
+	// all files, so we can produce a version-related error message rather than
 	// potentially-confusing downstream errors.
 	versionDiags := cfg.CheckCoreVersionRequirements(p.CorePackerVersion)
 	diags = append(diags, versionDiags...)
@@ -152,11 +145,17 @@ func (p *Parser) Parse(filename string, varFiles []string, argVars map[string]st
 	}
 
 	// Decode required_plugins blocks
+	// and create implicit required_plugins blocks
 	{
 		for _, file := range files {
 			diags = append(diags, cfg.decodeRequiredPluginsBlock(file)...)
 		}
+		for _, file := range files {
+			diags = append(diags, cfg.decodeImplicitRequiredPluginsBlocks(file)...)
+		}
 	}
+
+	diags = append(diags, cfg.detectPluginBinaries()...)
 
 	// Decode variable blocks so that they are available later on. Here locals
 	// can use input variables so we decode them firsthand.

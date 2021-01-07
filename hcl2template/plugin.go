@@ -1,9 +1,12 @@
 package hcl2template
 
 import (
+	"crypto/sha256"
 	"fmt"
+	"runtime"
 
 	"github.com/hashicorp/hcl/v2"
+	"github.com/hashicorp/packer/packer-plugin-sdk/plugin"
 	plugingetter "github.com/hashicorp/packer/packer/plugin-getter"
 )
 
@@ -33,6 +36,7 @@ func (cfg *PackerConfig) PluginRequirements() (plugingetter.Requirements, hcl.Di
 			}
 
 			reqs = append(reqs, &plugingetter.Requirement{
+				Accessor:           name,
 				Identifier:         block.Type,
 				VersionConstraints: block.Requirement.Required,
 			})
@@ -42,4 +46,40 @@ func (cfg *PackerConfig) PluginRequirements() (plugingetter.Requirements, hcl.Di
 	}
 
 	return reqs, diags
+}
+
+func (cfg *PackerConfig) detectPluginBinaries() hcl.Diagnostics {
+	opts := plugingetter.ListInstallationsOptions{
+		FromFolders: cfg.parser.PluginStore.KnownPluginFolders,
+		BinaryInstallationOptions: plugingetter.BinaryInstallationOptions{
+			OS:        runtime.GOOS,
+			ARCH:      runtime.GOARCH,
+			Extension: plugin.FileExtension,
+			Checksummers: []plugingetter.Checksummer{
+				{Type: "sha256", Hash: sha256.New()},
+			},
+		},
+	}
+
+	pluginReqs, diags := cfg.PluginRequirements()
+	if diags.HasErrors() {
+		return diags
+	}
+
+	for _, pluginRequirement := range pluginReqs {
+		installs, err := pluginRequirement.ListInstallations(opts)
+		if err != nil {
+			panic(err) // fill diag error
+		}
+		if len(installs) == 0 {
+			panic("no plugin installed for " + pluginRequirement.Identifier.ForDisplay())
+		}
+		install := installs[0]
+		err = cfg.parser.PluginStore.DiscoverPlugin(pluginRequirement.Accessor, install.BinaryPath)
+		if err != nil {
+			panic(err)
+		}
+	}
+
+	return diags
 }
